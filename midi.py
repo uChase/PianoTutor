@@ -3,6 +3,7 @@ import threading
 
 # Shared state for MIDI notes
 current_midi_note = []
+flash_pressed = []
 
 NOTE_NAMES = [
     'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'
@@ -24,10 +25,11 @@ def get_note_name(note_number):
 
 
 def midi_input_callback(message):
-    global current_midi_note
+    global current_midi_note, flash_pressed
     if message.type == 'note_on' and message.velocity > 0:
         print(f"Received MIDI note: {get_note_name(message.note)}")
         current_midi_note.append(message.note)
+        flash_pressed.append(message.note)
     elif message.type == 'note_off' or (message.type == 'note_on' and message.velocity == 0):
         current_midi_note.remove(message.note)
 

@@ -6,10 +6,10 @@ import midi
 import fallingnotes
 import loadsong
 
+
 # Initialize Pygame
 pygame.init()
 
-# Constants
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 RED = (237, 41, 57)
@@ -47,7 +47,8 @@ screen = pygame.display.set_mode((screen_width, screen_height), pygame.RESIZABLE
 pygame.display.set_caption("Piano Tutor")
 
 FPS = 60
-TIME_TO_HIT = 5 
+TIME_TO_HIT = 4
+BEATS_PER_MINUTE = 60
 
 # Load keyboard image
 keyboard_image = pygame.image.load(KEYBOARD_IMAGE_PATH)
@@ -116,13 +117,13 @@ def spawn_notes(song_data):
             key_width = screen_width / 35
             for note, duration, start_time in beat:
                 note_x = get_key_x_position(note, key_width)
-                note_y = - fallingnotes.calculateHeight(duration, note_speed) # Start at the top based on start time
+                note_y = - fallingnotes.calculateHeight(duration, note_speed, BEATS_PER_MINUTE) # Start at the top based on start time
                 if note in MIDI_POSITIONS:
-                    falling_note = fallingnotes.FallingNote(note, note_x, note_y, key_width, fallingnotes.calculateHeight(duration, note_speed), screen, hand)
-                    falling_notes.append((falling_note, beat_index + start_time))
+                    falling_note = fallingnotes.FallingNote(note, note_x, note_y, key_width, fallingnotes.calculateHeight(duration, note_speed, BEATS_PER_MINUTE), screen, hand)
+                    falling_notes.append((falling_note, (beat_index + start_time) * 60 / BEATS_PER_MINUTE, duration * 60 / BEATS_PER_MINUTE))
                 else:
-                    falling_note = fallingnotes.FallingNote(note, note_x, note_y, key_width / 3, fallingnotes.calculateHeight(duration, note_speed), screen, hand)
-                    falling_notes.append((falling_note, beat_index + start_time))
+                    falling_note = fallingnotes.FallingNote(note, note_x, note_y, key_width / 3, fallingnotes.calculateHeight(duration, note_speed, BEATS_PER_MINUTE), screen, hand)
+                    falling_notes.append((falling_note, (beat_index + start_time) * 60 / BEATS_PER_MINUTE, duration * 60 / BEATS_PER_MINUTE))
 
 
     
@@ -130,7 +131,7 @@ def spawn_notes(song_data):
 
 
 def main():
-    global screen, keyboard_image, keyboard_image_height, screen_width, screen_height, note_speed
+    global screen, keyboard_image, keyboard_image_height, screen_width, screen_height, note_speed, falling_notes
     clock = pygame.time.Clock()
     
     start_ticks = pygame.time.get_ticks()
@@ -143,9 +144,15 @@ def main():
     midi_thread = threading.Thread(target=midi.getInput)
     midi_thread.daemon = True
     midi_thread.start()
+    score = 0
+    prev_midi_notes = []
 
     # Main loop
     while True:
+        is_flash_pressed = False
+        if len(midi.flash_pressed) != 0:
+            is_flash_pressed = True
+
         delta_time = clock.get_time() / 1000.0  # Convert milliseconds to seconds
 
         if started_song:
@@ -161,13 +168,20 @@ def main():
                 screen = pygame.display.set_mode((screen_width, screen_height), pygame.RESIZABLE)
                 keyboard_image_height = screen_height // 4
                 keyboard_image = pygame.transform.scale(keyboard_image, (screen_width, keyboard_image_height))
-                note_speed = screen_height / (TIME_TO_HIT)
+                note_speed = (screen_height - keyboard_image_height) / (TIME_TO_HIT)
 
 
         if not started_song and len(midi.current_midi_note) != 0 and midi.current_midi_note[0] == 60:
             spawn_notes(song_data)
             start_ticks = pygame.time.get_ticks()
             started_song = True
+            midi.flash_pressed.clear()
+
+        if started_song and 36 in midi.current_midi_note and 96 in midi.current_midi_note:
+            started_song = False
+            current_time = 0
+            score = 0
+            falling_notes = []
 
         # Fill the background
         screen.fill(WHITE)
@@ -175,22 +189,57 @@ def main():
         # Draw the keyboard image at the bottom fourth of the screen
         screen.blit(keyboard_image, (0, screen_height - keyboard_image_height))
 
+                    
 
-        # Update and draw falling notes
-        for falling_note, start_time in falling_notes:
-            if falling_note.noteHeight <= 0:
+        # Draw the keys that are being pressed
+        hit_keys(midi.current_midi_note)
+
+        if prev_midi_notes != midi.current_midi_note:
+            print(midi.current_midi_note)
+            print(prev_midi_notes)
+
+        for falling_note, start_time, duration in falling_notes:
+            if current_time > start_time + duration + TIME_TO_HIT + 1.5:
                 continue
             if start_time <= current_time:
                 falling_note.fall(delta_time, note_speed)
                 falling_note.draw()
                 falling_note.decrease_and_delete(screen_height - keyboard_image_height)
+                if (current_time ) + .3 > start_time + TIME_TO_HIT and current_time - .3 < start_time + TIME_TO_HIT and not falling_note.isHitCorrect:
+                    #checks if note is hit on time
+                    if falling_note.note in midi.flash_pressed:
+                        falling_note.setIsHitCorrect()
+                        score += 1
+                        midi.flash_pressed.remove(falling_note.note)
+                        falling_note.correctEffect()
+                elif current_time  < start_time + duration + TIME_TO_HIT - .4 and current_time > start_time + TIME_TO_HIT and falling_note.isHitCorrect and falling_note.isReleasedCorrect:
+                    #checks if released too early
+                    if falling_note.note not in midi.current_midi_note:
+                        score -= 1
+                        falling_note.setIsReleasedIncorrect()
+                        falling_note.released = True
+                        falling_note.stopCorrectEffect()
+                elif current_time < start_time + duration + TIME_TO_HIT + .3 and current_time - .4 < start_time + duration + TIME_TO_HIT and not falling_note.released and falling_note.isHitCorrect:
+                    #checks if released on time
+                    if falling_note.note not in midi.current_midi_note:
+                        falling_note.released = True
+                        falling_note.stopCorrectEffectGood()
+                elif current_time > start_time + duration + TIME_TO_HIT + .3 and not falling_note.released and falling_note.isHitCorrect:
+                    #checks if released too late
+                    falling_note.stopCorrectEffect()
+                    falling_note.released = True
+                    score -= 1
+                falling_note.update_particles(delta_time)
+        if is_flash_pressed and midi.flash_pressed != [] and started_song:
+            score -= len(midi.flash_pressed)
+                
 
-        # Draw the keys that are being pressed
-        hit_keys(midi.current_midi_note)
 
         
         time_text = font.render(f"Time: {current_time:.2f}s", True, BLACK)
+        score_text = font.render(f"Score: {score}", True, BLACK)
         screen.blit(time_text, (screen_width - time_text.get_width() - 10, 10))
+        screen.blit(score_text, (screen_width - score_text.get_width() - 10, 50))
 
         
 
@@ -198,6 +247,9 @@ def main():
         # Update the display
         pygame.display.flip()
         clock.tick(FPS)
+        prev_midi_notes = (midi.current_midi_note)
+        if is_flash_pressed:
+            midi.flash_pressed = []
 
 if __name__ == "__main__":
     main()
